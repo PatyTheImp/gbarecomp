@@ -452,6 +452,7 @@ extern "C" int runtime_bridge_interpret(uint32_t entry_pc, bool entry_thumb,
 
     // ── (1) Stop-address contract ──────────────────────────────────
     const std::uint32_t entry_depth = runtime_call_stack_depth();
+    const std::uint32_t entry_floor = runtime_call_stack_floor();
     std::uint32_t stop_pc;
     bool top_level = (entry_depth == 0);
     if (forced_stop_pc != 0u) {
@@ -655,7 +656,18 @@ extern "C" int runtime_bridge_interpret(uint32_t entry_pc, bool entry_thumb,
     // An IRQ continuation that healed to static is not a subroutine return —
     // runtime_irq()'s loop re-dispatches the static entry natively — so do not
     // pop a call-return frame here.
-    if (!top_level && !irq_cont) {
+    //
+    // Exception: inside an IRQ, a bridge opened for a subroutine called by
+    // generated code has that call's frame above the IRQ floor. If it healed
+    // to static exactly at that frame's return address, the call completed:
+    // the BL site sees R15 == its return address and continues inline, so
+    // nothing else pops the frame. Pop it here, as runtime_call_should_return
+    // would for a native return; otherwise it outlives the IRQ and becomes a
+    // later bridge's bogus stop_pc. Where the bridge stops is unchanged.
+    const bool irq_call_returned =
+        irq_cont && !top_level && entry_depth > entry_floor &&
+        (g_cpu.R[15] & ~1u) == stop_pc;
+    if ((!top_level && !irq_cont) || irq_call_returned) {
         // Restore the entry stack minus exactly the one frame the missed
         // subroutine's return idiom (`bx lr` / `pop {pc}`) would have popped
         // via runtime_call_should_return.
