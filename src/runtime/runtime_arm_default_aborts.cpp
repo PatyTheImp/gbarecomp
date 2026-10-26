@@ -116,6 +116,9 @@ void self_heal_write_report(const char* frag_path) {
     std::uint64_t healed = 0, native_calls = 0, inflight = 0, failed = 0;
     gbarecomp::overlay_counters(&healed, &native_calls, &inflight, &failed);
 
+    // Call-return integrity: frames runtime_irq had to drop at iret (leaks).
+    std::printf("irq_stale_frames_dropped=%llu\n", g_runtime_irq_stale_frames);
+
     if (g_misses.empty() && healed == 0) {
         std::printf("self_heal_coverage=FULLY_STATIC dispatch_misses=0 "
                     "interpreted_insns=0 healed_native=0\n");

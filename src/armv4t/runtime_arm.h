@@ -189,6 +189,9 @@ void runtime_call_cancel_return(uint32_t return_pc);
 uint32_t        runtime_call_stack_depth(void);
 // Lowest slot a guest return may match (the active IRQ floor).
 uint32_t        runtime_call_stack_floor(void);
+// Stale call-return frames runtime_irq dropped above an IRQ floor at iret.
+// A non-zero value is a leak report, not normal operation.
+extern unsigned long long g_runtime_irq_stale_frames;
 const uint32_t* runtime_call_stack_data(void);
 void            runtime_call_stack_restore(const uint32_t* entries,
                                            uint32_t depth);

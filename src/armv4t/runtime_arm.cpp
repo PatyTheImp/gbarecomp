@@ -1168,6 +1168,9 @@ extern "C" unsigned long long g_runtime_irq_entries = 0;
 // mid-handler to allow nested IRQs.
 extern "C" uint32_t      g_irq_nest_depth = 0;
 extern "C" unsigned long long g_runtime_irq_max_depth = 0;
+// Call-return frames found above an IRQ's floor after its iret and dropped
+// (see the end of runtime_irq). Must stay 0; reported at exit.
+extern "C" unsigned long long g_runtime_irq_stale_frames = 0;
 // Depth at which the most recent IRQ-mode iret fired (set in
 // runtime_exception_return). runtime_irq() resets this to 0 on entry and
 // spins its drive-to-completion loop until it equals the IRQ's own depth.
@@ -1266,6 +1269,27 @@ extern "C" void runtime_irq(uint32_t return_address) {
         runtime_dispatch(g_cpu.R[15]);
     }
     g_irq_iret_depth = saved_iret;  // restore an enclosing IRQ's expectation
+    // Invariant: once this IRQ has iret'd, no call-return frame opened above
+    // its floor (== the depth at entry) has a live host frame — the drive loop
+    // only exits after the generated callers inside the handler unwound. Any
+    // frame still there is stale and would be matched (or used as a bridge
+    // stop_pc) by the interrupted code. Drop it, LOUDLY: this is a safety net
+    // that counts and reports a defect, never a silent fix.
+    if (g_call_return_depth > g_call_return_floor) {
+        const uint32_t stale = g_call_return_depth - g_call_return_floor;
+        g_runtime_irq_stale_frames += stale;
+        static uint32_t reported = 0;
+        if (reported < 16u) {
+            ++reported;
+            std::fprintf(stderr,
+                "runtime_irq: dropping %u stale call-return frame(s) above the "
+                "IRQ floor at iret (depth %u -> %u, top return_pc=0x%08X, irq "
+                "depth %u) - a call frame leaked inside the handler\n",
+                stale, g_call_return_depth, g_call_return_floor,
+                g_call_return_stack[g_call_return_depth - 1u], my_depth);
+        }
+        g_call_return_depth = g_call_return_floor;
+    }
     g_call_return_floor = saved_floor;
     --g_irq_nest_depth;
 }
