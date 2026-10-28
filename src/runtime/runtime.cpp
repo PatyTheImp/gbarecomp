@@ -2152,6 +2152,10 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         runtime_set_frame_present_hook([&]() -> bool {
             uint64_t frame = ppu.frame_count();
             if (frame != last_presented_frame) {
+                // Guest frames this present covers (read before the input
+                // pump, which may load a savestate and move the counters).
+                const uint64_t covered = frame > last_presented_frame
+                    ? frame - last_presented_frame : 1;
                 const uint64_t fp_t0 = FramePhaseRing::now_ns();
                 const bool view_changed = sync_resize_driven_view();
                 if (ppu.has_latched_framebuffer() && !view_changed) {
@@ -2175,7 +2179,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 ++frames_presented;
                 if (args.frames >= 0 && frames_presented >= args.frames)
                     host_quit = true;
-                if (pacer) pacer->wait_for_next_frame();
+                if (pacer) pacer->wait_for_next_frame(covered);
                 frame_phase.record(frame, fp_t0, fp_t1, fp_t2, fp_t3, fp_t4,
                                    FramePhaseRing::now_ns());
             }
@@ -2483,6 +2487,10 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             }
             uint64_t frame = ppu.frame_count();
             if (frame != last_presented_frame) {
+                // Guest frames this present covers (read before the input
+                // pump, which may load a savestate and move the counters).
+                const uint64_t covered = frame > last_presented_frame
+                    ? frame - last_presented_frame : 1;
                 const uint64_t fp_t0 = FramePhaseRing::now_ns();
                 const bool view_changed = sync_resize_driven_view();
                 if (ppu.has_latched_framebuffer() && !view_changed) {
@@ -2520,7 +2528,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 }
                 // Pace to real GBA time. Decoupled from monitor vsync
                 // (MC-HP-004); hold Tab to uncap (fast-forward).
-                if (pacer) pacer->wait_for_next_frame();
+                if (pacer) pacer->wait_for_next_frame(covered);
                 frame_phase.record(frame, fp_t0, fp_t1, fp_t2, fp_t3, fp_t4,
                                    FramePhaseRing::now_ns());
             }

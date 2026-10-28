@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -39,9 +40,15 @@ public:
     FramePacer(const FramePacer&) = delete;
     FramePacer& operator=(const FramePacer&) = delete;
 
-    // Block until the next frame's deadline. Call once per presented
-    // frame. No-op while uncapped.
-    void wait_for_next_frame();
+    // Block until the deadline of the last guest frame this present covers.
+    // Call once per presented frame with the number of guest frames it
+    // covers (frame_count - last presented frame): a present that covers N
+    // guest frames waits N periods, so stretches where the guest ran several
+    // frames between presents stay at real time instead of running N times
+    // faster (and overfilling the audio queue). The resync rule is unchanged:
+    // if the host is already more than one period behind that deadline, it
+    // realigns to now instead of catching up. No-op while uncapped.
+    void wait_for_next_frame(std::uint64_t guest_frames = 1);
 
     // Realign the deadline to "now". Call after any non-real-time jump
     // (startup, save-state load) so the pacer doesn't try to catch up.

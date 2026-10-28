@@ -50,11 +50,15 @@ void FramePacer::reset() {
     next_ = clock::now() + period_;
 }
 
-void FramePacer::wait_for_next_frame() {
+void FramePacer::wait_for_next_frame(std::uint64_t guest_frames) {
     if (uncapped_) {
         next_ = clock::now();  // keep the deadline current for re-cap
         return;
     }
+    if (guest_frames == 0) guest_frames = 1;
+    // Deadline of the last guest frame this present covers: one period per
+    // guest frame, not per present.
+    next_ += period_ * static_cast<std::int64_t>(guest_frames - 1);
     clock::time_point now = clock::now();
     // If we've fallen more than one whole frame behind, resync instead
     // of trying to replay the lost time (avoids a catch-up death spiral
