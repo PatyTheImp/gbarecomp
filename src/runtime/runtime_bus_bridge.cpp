@@ -828,6 +828,35 @@ void runtime_set_frame_present_hook(std::function<bool()> h) {
     g_frame_present_quit = false;
 }
 
+// Frame-boundary input hook (GBARECOMP_INPUT_RECORD / GBARECOMP_INPUT_REPLAY).
+// Recorded and replayed key states change the guest's KEYINPUT at exactly one
+// point per frame: the first guest instruction after VBlank-start that runs
+// outside an exception handler (g_irq_nest_depth == 0, User/System mode) — the
+// same point as the frame-present yield below. It is reached from
+// runtime_should_yield (generated code, overlays, the interpreter reference)
+// and from the self-heal interpreter bridge, which never calls
+// runtime_should_yield; so a game polling the keys inside a bridged subtree
+// sees them on the same instruction as natively and on the interpreter
+// reference. Fires at most once per VBlank-start (no double application).
+// The argument is 1 when the boundary was reached inside the bridge.
+std::function<void(bool)> g_frame_input_hook;
+static unsigned long long g_runtime_input_vblank_start = 0;
+
+void runtime_set_frame_input_hook(std::function<void(bool)> h) {
+    g_frame_input_hook = std::move(h);
+    g_runtime_input_vblank_start = g_runtime_vblank_starts;
+}
+
+extern "C" void runtime_frame_input_boundary(int from_bridge) {
+    if (!g_frame_input_hook || g_irq_nest_depth != 0u ||
+        g_runtime_vblank_starts == g_runtime_input_vblank_start)
+        return;
+    const uint32_t mode = g_cpu.cpsr & 0x1Fu;
+    if (mode != 0x10u && mode != 0x1Fu) return;
+    g_runtime_input_vblank_start = g_runtime_vblank_starts;
+    g_frame_input_hook(from_bridge != 0);
+}
+
 extern "C" bool runtime_should_yield(void) {
     auto* bus = gbarecomp::g_active_bus;
 
@@ -845,6 +874,9 @@ extern "C" bool runtime_should_yield(void) {
 
     // Present-in-place quit: fully unwind the guest to the runner once requested.
     if (g_frame_present_quit) return true;
+
+    // Recorded/replayed input lands here, before the frame-present yield.
+    runtime_frame_input_boundary(0);
 
     bool halted = bus && bus->io().halted();
 

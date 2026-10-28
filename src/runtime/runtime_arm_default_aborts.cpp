@@ -425,6 +425,9 @@ extern "C" const char* g_tick_ctx;
 // runtime_irq() (g_call_return_floor): the floor keeps the cancel cascade from
 // corrupting mainline frames; this keeps the self-heal bridge from bailing early.
 extern "C" uint32_t g_irq_nest_depth;
+// Frame-boundary input hook (runtime_bus_bridge.cpp): the bridge never calls
+// runtime_should_yield, so it reaches the per-frame input point itself.
+extern "C" void runtime_frame_input_boundary(int from_bridge);
 
 // runtime_bridge_interpret — the interpret-the-missed-subtree core, factored out
 // of runtime_dispatch_miss so the P6 sljit differential gate can reuse it as its
@@ -531,6 +534,7 @@ extern "C" int runtime_bridge_interpret(uint32_t entry_pc, bool entry_thumb,
         const bool was_thumb = cpu.thumb;
         g_cpu.R[15] = pc;  // store_interp already set this; explicit for clarity
         bus->set_bios_access_enabled(pc < 0x00004000u);
+        runtime_frame_input_boundary(1);
         if (g_runtime_insn_trace) runtime_insn_fp();
 
         // Fetch + decode at the current PC.

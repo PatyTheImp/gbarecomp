@@ -73,6 +73,11 @@ extern "C" unsigned long long g_runtime_irq_entries;
 // a hook makes the per-VBlank frame-present yield present + resume in place
 // instead of unwinding the guest stack — see the windowed runner below.
 void runtime_set_frame_present_hook(std::function<bool()>);
+// Frame-boundary input hook setter (runtime_bus_bridge.cpp): input record and
+// replay change KEYINPUT only at the per-frame input point, which is reached
+// natively, on the interpreter reference and inside the self-heal bridge. The
+// argument is true when the point was reached inside the bridge.
+void runtime_set_frame_input_hook(std::function<void(bool)>);
 
 #ifndef GBARECOMP_DEFAULT_GAME_CONFIG
 #define GBARECOMP_DEFAULT_GAME_CONFIG "game.toml"
@@ -2053,33 +2058,54 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         std::printf("input_replay=DISABLED\n");
     }
 
-    auto apply_input_replay = [&]() {
-        if (!input_replay_requested) return;
+    // Returns true when the guest's key state changed.
+    bool input_replay_have_value = false;
+    uint16_t input_replay_last_value = 0x03FFu;
+    auto apply_input_replay = [&]() -> bool {
+        if (!input_replay_requested) return false;
         const uint64_t frame = ppu.frame_count();
         while (input_replay_index + 1 < input_replay_events.size() &&
                input_replay_events[input_replay_index + 1].frame <= frame) {
             ++input_replay_index;
         }
-        if (input_replay_events[input_replay_index].frame <= frame)
-            bus.io().set_keyinput(
-                input_replay_events[input_replay_index].keyinput);
+        if (input_replay_events[input_replay_index].frame > frame) return false;
+        const uint16_t keys = input_replay_events[input_replay_index].keyinput;
+        bus.io().set_keyinput(keys);
+        const bool changed =
+            !input_replay_have_value || keys != input_replay_last_value;
+        input_replay_have_value = true;
+        input_replay_last_value = keys;
+        return changed;
+    };
+
+    // Recording: the host key state polled by pump_host_input is held here and
+    // reaches the guest (and the trace) only at the frame-boundary input point,
+    // the same point replay uses. Returns true when the key state changed.
+    uint16_t input_record_host_value = 0x03FFu;
+    auto commit_record_input = [&]() -> bool {
+        if (!input_record_requested) return false;
+        bus.io().set_keyinput(input_record_host_value);
+        if (input_record_have_value &&
+            input_record_host_value == input_record_last_value)
+            return false;
+        char row[64];
+        std::snprintf(row, sizeof(row), "%llu,0x%04X\n",
+                      static_cast<unsigned long long>(ppu.frame_count()),
+                      static_cast<unsigned>(input_record_host_value));
+        input_record_stream << row;
+        input_record_stream.flush();
+        input_record_have_value = true;
+        input_record_last_value = input_record_host_value;
+        return true;
     };
 
     auto pump_host_input = [&]() {
         if (!args.window) return;
         auto ev = win.pump();
-        if (!input_replay_requested) bus.io().set_keyinput(ev.keyinput);
-        if (input_record_requested &&
-            (!input_record_have_value || ev.keyinput != input_record_last_value)) {
-            char row[64];
-            std::snprintf(row, sizeof(row), "%llu,0x%04X\n",
-                          static_cast<unsigned long long>(ppu.frame_count()),
-                          static_cast<unsigned>(ev.keyinput));
-            input_record_stream << row;
-            input_record_stream.flush();
-            input_record_have_value = true;
-            input_record_last_value = ev.keyinput;
-        }
+        if (input_record_requested)
+            input_record_host_value = ev.keyinput;  // committed at the boundary
+        else if (!input_replay_requested)
+            bus.io().set_keyinput(ev.keyinput);
         if (ev.quit) host_quit = true;
         if (pacer) pacer->set_uncapped(ev.fast_forward);
         // System hotkeys (config.ini [KeyMap], rebindable in the launcher).
@@ -2416,8 +2442,23 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // Battery-save auto-flush debounce (see the loop body). ~1 s at 59.7 Hz.
     constexpr uint64_t kSaveFlushIntervalFrames = 60;
     uint64_t save_last_flush_frame = ppu.frame_count();
+    // Initial key state (frame 0), then every change at the frame-boundary
+    // input point only (no other code path writes KEYINPUT while recording or
+    // replaying, so an event is never applied twice or overwritten).
+    uint64_t input_changes = 0, input_changes_in_bridge = 0;
     if (input_replay_requested) apply_input_replay();
     if (args.window) pump_host_input();
+    if (input_record_requested) commit_record_input();
+    if (input_record_requested || input_replay_requested) {
+        runtime_set_frame_input_hook([&](bool from_bridge) {
+            const bool changed = input_replay_requested ? apply_input_replay()
+                                                        : commit_record_input();
+            if (changed) {
+                ++input_changes;
+                if (from_bridge) ++input_changes_in_bridge;
+            }
+        });
+    }
 
     for (int i = 0; i < step_budget && !host_quit; ++i) {
         // Paused: hold the guest still, keep the window alive (input pump,
@@ -2429,8 +2470,8 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         }
         if (host_quit) break;
         if (!step_once()) break;
-        if (input_replay_requested) {
-            apply_input_replay();
+        if (input_replay_requested || input_record_requested) {
+            // Applied at the frame-boundary input point (hook above).
         } else if (demo_input) {
             const uint64_t fc = ppu.frame_count();
             if (fc != demo_last_frame) {
@@ -2567,6 +2608,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // Drop the present-in-place hook before the captured runner locals (win,
     // pacer, live_fb, …) go out of scope at function return.
     runtime_set_frame_present_hook(nullptr);
+    runtime_set_frame_input_hook(nullptr);
+    if (input_record_requested || input_replay_requested)
+        std::printf("input_%s key_changes=%llu in_bridge=%llu\n",
+                    input_replay_requested ? "replay" : "record",
+                    static_cast<unsigned long long>(input_changes),
+                    static_cast<unsigned long long>(input_changes_in_bridge));
     frame_phase.dump();  // HP-002: flush the phase ring (env-gated CSV)
     // HP-002: flush the always-on MMIO write ring (gba_io.cpp) to CSV.
     // GBARECOMP_MMIO_DUMP=<path>. Offline analysis derives the scanline of
