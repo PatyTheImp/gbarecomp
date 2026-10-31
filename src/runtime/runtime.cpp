@@ -36,6 +36,7 @@
 #include "overlay_loader.h"
 #include "sha1.h"
 #include "snapshot.h"
+#include "file_replace.h"
 #include "tcp_debug_server.h"
 #ifdef GBA_COSIM
 #include "cosim.h"           // cosim_init() — first-divergence oracle TCP server
@@ -412,35 +413,6 @@ bool write_png(const std::string& path, const uint8_t* rgb,
     f.write(reinterpret_cast<const char*>(out.data()),
             static_cast<std::streamsize>(out.size()));
     return static_cast<bool>(f);
-}
-
-bool write_file(const std::string& path, const std::vector<uint8_t>& bytes,
-                std::string* err) {
-    std::filesystem::path p(path);
-    std::error_code ec;
-    if (p.has_parent_path()) {
-        std::filesystem::create_directories(p.parent_path(), ec);
-        if (ec) {
-            if (err) *err = "could not create save directory " +
-                            p.parent_path().string() + ": " + ec.message();
-            return false;
-        }
-    }
-
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) {
-        if (err) *err = "could not open save file for write " + path;
-        return false;
-    }
-    if (!bytes.empty()) {
-        f.write(reinterpret_cast<const char*>(bytes.data()),
-                static_cast<std::streamsize>(bytes.size()));
-    }
-    if (!f) {
-        if (err) *err = "could not write save file " + path;
-        return false;
-    }
-    return true;
 }
 
 bool apply_toml_file(const std::filesystem::path& path, Args* args,
@@ -1313,33 +1285,9 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             ? bus.save().sram_bytes()
             : (bus.save().flash_enabled() ? bus.save().flash_bytes()
                                           : bus.save().eeprom_bytes());
-        // Atomic write: write a sibling temp file, then rename it over the
-        // target. A crash / kill mid-write can then only ever lose the temp
-        // file — the real save file is either the previous complete state or
-        // the new complete state, never a torn/half-written mix. This matters
-        // because we now flush periodically during play (see the loop), not
-        // just once on exit.
-        const std::string tmp = args.save_path + ".tmp";
-        if (!write_file(tmp, save_bytes, &err)) {
+        if (!debug::replace_file(args.save_path, save_bytes.data(), save_bytes.size(), &err)) {
             std::fprintf(stderr, "[gbarecomp:runtime] %s\n", err.c_str());
-            return false;
-        }
-        std::error_code ec;
-        std::filesystem::rename(tmp, args.save_path, ec);  // REPLACE_EXISTING on NTFS/POSIX
-        if (ec) {
-            // Rare filesystems refuse atomic rename-over; fall back to
-            // remove-then-rename (a narrower non-atomic window, still far
-            // better than writing the target in place).
-            std::error_code ec2;
-            std::filesystem::remove(args.save_path, ec2);
-            std::filesystem::rename(tmp, args.save_path, ec2);
-            if (ec2) {
-                std::fprintf(stderr,
-                             "[gbarecomp:runtime] save rename failed: %s\n",
-                             ec2.message().c_str());
-                std::filesystem::remove(tmp, ec2);
-                return false;
-            }
+            return false;  // Keep dirty: a later flush can retry.
         }
         bus.save().clear_dirty();
         if (!args.quiet) {

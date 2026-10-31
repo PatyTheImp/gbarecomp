@@ -312,6 +312,7 @@ add_library(gbarecomp_debug STATIC
     src/debug/tcp_debug_server.cpp
     src/debug/trace_ring.cpp
     src/debug/snapshot.cpp
+    src/debug/file_replace.cpp
     src/debug/ws_provenance.cpp
     src/debug/ws_sidecar.cpp
     # First-divergence co-sim engine + full-state hash. Empty TUs unless

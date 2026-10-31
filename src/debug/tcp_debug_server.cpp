@@ -118,7 +118,18 @@ bool extract_string(std::string_view req, std::string_view key,
 
 void emit_error(std::string& out, const char* msg) {
     out = "{\"ok\":false,\"error\":\"";
-    out += msg;
+    // File errors can contain Windows paths. Keep failures valid JSON too.
+    static constexpr char hex[] = "0123456789abcdef";
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(msg); *p; ++p) {
+        if (*p < 0x20) {
+            out += "\\u00";
+            out.push_back(hex[*p >> 4]);
+            out.push_back(hex[*p & 15]);
+        } else {
+            if (*p == '\\' || *p == '"') out.push_back('\\');
+            out.push_back(static_cast<char>(*p));
+        }
+    }
     out += "\"}";
 }
 

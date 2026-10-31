@@ -15,6 +15,7 @@
 // the hard guarantee that layouts match).
 
 #include "snapshot.h"
+#include "file_replace.h"
 
 #include <fstream>
 #include <unordered_map>
@@ -124,18 +125,7 @@ bool save_state(const char* path, const SnapshotContext& ctx, std::string* err) 
     add_section(w, TAG_PPU,   [&](SnapshotWriter& s) { ctx.ppu->serialize(s); });
     add_section(w, TAG_META,  [&](SnapshotWriter& s) { serialize_meta(s, ctx); });
 
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) {
-        if (err) *err = std::string("snapshot: cannot open for write: ") + path;
-        return false;
-    }
-    f.write(reinterpret_cast<const char*>(w.buffer().data()),
-            static_cast<std::streamsize>(w.size()));
-    if (!f) {
-        if (err) *err = std::string("snapshot: write failed: ") + path;
-        return false;
-    }
-    return true;
+    return replace_file(path, w.buffer().data(), w.size(), err);
 }
 
 bool load_state(const char* path, const SnapshotContext& ctx, std::string* err) {
