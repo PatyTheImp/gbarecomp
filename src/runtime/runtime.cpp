@@ -2150,6 +2150,10 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                                bus.pal_ptr());
                 }
                 const uint64_t fp_t1 = FramePhaseRing::now_ns();
+                // Pace per covered guest frame immediately before presentation,
+                // keeping variable guest/render work inside the deadline.
+                if (pacer) pacer->wait_for_next_frame(covered);
+                const uint64_t fp_wait = FramePhaseRing::now_ns() - fp_t1;
                 win.present(live_fb.data());
                 const uint64_t fp_t2 = FramePhaseRing::now_ns();
                 int16_t audio_buf[2048];
@@ -2162,9 +2166,10 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 ++frames_presented;
                 if (args.frames >= 0 && frames_presented >= args.frames)
                     host_quit = true;
-                if (pacer) pacer->wait_for_next_frame(covered);
-                frame_phase.record(frame, fp_t0, fp_t1, fp_t2, fp_t3, fp_t4,
-                                   FramePhaseRing::now_ns());
+                // Keep the CSV phase meanings: charge the earlier wait to
+                // pacer_us, and keep the real exit time for the next guest_us.
+                frame_phase.record(frame, fp_t0, fp_t1, fp_t2 - fp_wait,
+                                   fp_t3 - fp_wait, fp_t4 - fp_wait, fp_t4);
             }
             return host_quit;
         });
@@ -2500,6 +2505,10 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                                bus.pal_ptr());
                 }
                 const uint64_t fp_t1 = FramePhaseRing::now_ns();
+                // Pace per covered guest frame immediately before presentation,
+                // keeping variable guest/render work inside the deadline.
+                if (pacer) pacer->wait_for_next_frame(covered);
+                const uint64_t fp_wait = FramePhaseRing::now_ns() - fp_t1;
                 win.present(live_fb.data());
                 // Framedump (capture runs only) is attributed to present_us.
                 if (framedump_dir && frame >= framedump_start &&
@@ -2524,11 +2533,10 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 if (args.frames >= 0 && frames_presented >= args.frames) {
                     host_quit = true;
                 }
-                // Pace to real GBA time. Decoupled from monitor vsync
-                // (MC-HP-004); hold Tab to uncap (fast-forward).
-                if (pacer) pacer->wait_for_next_frame(covered);
-                frame_phase.record(frame, fp_t0, fp_t1, fp_t2, fp_t3, fp_t4,
-                                   FramePhaseRing::now_ns());
+                // Keep the CSV phase meanings: charge the earlier wait to
+                // pacer_us, and keep the real exit time for the next guest_us.
+                frame_phase.record(frame, fp_t0, fp_t1, fp_t2 - fp_wait,
+                                   fp_t3 - fp_wait, fp_t4 - fp_wait, fp_t4);
             }
         }
         // Differential-oracle WRAM trace fires on frame advance in BOTH windowed
