@@ -25,6 +25,10 @@ struct RunOptions {
     const char*   builtin_rom_sha1  = nullptr;
     std::uint32_t builtin_rom_crc32 = 0;
 
+    // When generated BIOS code is tied to a particular dump, require that
+    // identity after asset selection, even if CLI/config permits another hash.
+    const char* required_bios_sha1 = nullptr;
+
     // Extended horizontal view is a game-owned enhancement capability, not a
     // generic emulator toggle. Values above the native 240 are the opt-in;
     // the default therefore makes stale config/environment settings inert.

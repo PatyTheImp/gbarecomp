@@ -965,6 +965,15 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         return 1;
     }
 
+    if (opts.required_bios_sha1 && bios.sha1_hex() != opts.required_bios_sha1) {
+        std::fprintf(stderr, "[gbarecomp:runtime] recompiled BIOS SHA-1 mismatch: got %s expected %s\n",
+                     bios.sha1_hex().c_str(), opts.required_bios_sha1);
+        return 1;
+    }
+    if (opts.required_bios_sha1)
+        std::printf("bios_recompiled=1 sha1=%s loaded_sha1=%s\n",
+                    opts.required_bios_sha1, bios.sha1_hex().c_str());
+
     std::vector<uint8_t> rom;
     if (!read_file(args.rom, &rom, &err)) {
         std::fprintf(stderr, "[gbarecomp:runtime] %s\n", err.c_str());

@@ -12,6 +12,7 @@ build-*/
 **/generated/*.cpp
 **/generated/*.h
 **/generated/*.json
+src/runtime/generated_bios/provenance.json
 
 # Editor / OS noise
 .vscode/
